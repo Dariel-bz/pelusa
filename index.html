@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pelusa</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;overflow:hidden;color:#fff;font-family:Fredoka,ui-rounded,system-ui,sans-serif;touch-action:none;-webkit-user-select:none;user-select:none}
+body{background:radial-gradient(120% 90% at 50% 28%,#6f4c93 0%,#3b2a68 46%,#1b1437 100%)}
+#c{position:fixed;inset:0;width:100%;height:100%}
+.ov{position:fixed;left:0;right:0;text-align:center;pointer-events:none;padding:0 16px}
+#bubble{top:calc(env(safe-area-inset-top,0px) + 9vh);font-size:clamp(20px,5vw,30px);font-weight:600;opacity:0;transform:translateY(8px);transition:.5s;text-shadow:0 2px 18px #2a1050}
+#bubble.on{opacity:1;transform:none}
+#chip{bottom:calc(env(safe-area-inset-bottom,0px) + 19vh)}
+#chip span{display:inline-block;padding:6px 14px;border-radius:99px;background:#ffffff1f;backdrop-filter:blur(8px);font-size:15px;opacity:0;transition:opacity .35s}
+#chip.on span{opacity:1}
+#guide{bottom:calc(env(safe-area-inset-bottom,0px) + 9vh);display:flex;gap:10px;justify-content:center;flex-wrap:wrap;opacity:0;transition:opacity .8s}
+#guide.on{opacity:.9}
+#guide span{font-size:26px;filter:drop-shadow(0 2px 8px #0006)}
+#go{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 12vh);transform:translateX(-50%);border:0;border-radius:99px;padding:16px 34px;font:600 20px Fredoka,ui-rounded,system-ui;color:#4a1e5c;background:linear-gradient(#ffd3e6,#ff9ec4);box-shadow:0 0 40px #ff9ec488,0 6px 0 #c8628f;cursor:pointer;touch-action:manipulation}
+#go:active{transform:translateX(-50%) translateY(4px);box-shadow:0 0 30px #ff9ec488,0 2px 0 #c8628f}
+#tools{position:fixed;top:calc(env(safe-area-inset-top,0px) + 12px);right:12px;display:flex;gap:8px}
+#tools button{border:0;border-radius:99px;min-width:42px;height:42px;padding:0 12px;background:#ffffff1c;color:#fff;font:500 14px Fredoka,system-ui;backdrop-filter:blur(8px);cursor:pointer}
+#cam{position:fixed;left:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);width:112px;height:84px;border-radius:20px;overflow:hidden;opacity:0;transition:opacity 1s;box-shadow:0 0 0 2px #ffffff30,0 8px 24px #0006;pointer-events:none}
+#cam.on{opacity:.75}
+#cam video,#cam canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#cam video{transform:scaleX(-1)}
+#cam canvas{fill:#fff}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="bubble" class="ov"></div>
+<div id="chip" class="ov"><span></span></div>
+<div id="guide" class="ov"><span>👋</span><span>❤️</span><span>👍</span><span>✌️</span><span>✊</span><span>👉</span></div>
+<button id="go">Despertar a Pelusa</button>
+<div id="tools"><button id="snd" aria-label="Sonido">🔊</button><button id="qual">Calidad alta</button></div>
+<div id="cam"><video id="v" playsinline muted></video><canvas id="pc" width="112" height="84"></canvas></div>
+
+<script type="module">
+import {GestureRecognizer,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ───────── utils ───────── */
+const $=s=>document.querySelector(s),clamp=(v,a,b)=>Math.min(b,Math.max(a,v)),lerp=(a,b,t)=>a+(b-a)*t,rnd=(a,b)=>a+Math.random()*(b-a),pick=a=>a[Math.random()*a.length|0];
+const q={low:/Android|iPhone|iPad/i.test(navigator.userAgent)&&(navigator.hardwareConcurrency||8)<=4};
+let T=0;
+
+/* ───────── audio (WebAudio, sin archivos) ───────── */
+let actx,sound=true;
+const tone=(f,d=.12,type='sine',v=.06,slide=1,delay=0)=>{if(!sound||!actx)return;const o=actx.createOscillator(),g=actx.createGain(),t=actx.currentTime+delay;o.type=type;o.frequency.setValueAtTime(f,t);o.frequency.exponentialRampToValueAtTime(f*slide,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g).connect(actx.destination);o.start(t);o.stop(t+d)};
+const SFX={hand:()=>tone(880,.08,'sine',.03,1.2),hello:()=>{tone(520,.12,'sine',.06,1.3);tone(780,.16,'sine',.06,1.2,.12)},
+love:()=>[523,659,784].forEach((f,i)=>tone(f,.25,'sine',.06,1,i*.12)),angry:()=>{tone(220,.25,'sawtooth',.04,.6);tone(170,.3,'square',.03,.5,.2)},
+surprise:()=>tone(400,.15,'triangle',.07,2.2),hop:()=>tone(300,.12,'sine',.06,1.8),sleep:()=>tone(400,.7,'sine',.04,.5),sad:()=>tone(360,.45,'sine',.05,.6),cheer:()=>[600,800,1000].forEach((f,i)=>tone(f,.12,'square',.025,1,i*.09))};
+
+/* ───────── UI helpers ───────── */
+let bT,cT;
+const say=(t,ms=2400)=>{const b=$('#bubble');b.textContent=t;b.classList.add('on');clearTimeout(bT);bT=setTimeout(()=>b.classList.remove('on'),ms)};
+const chip=t=>{const c=$('#chip');c.firstElementChild.textContent=t;c.classList.add('on');clearTimeout(cT);cT=setTimeout(()=>c.classList.remove('on'),1400)};
+
+/* ───────── PARÁMETROS DE EXPRESIÓN Y ESTADOS (editar aquí la personalidad) ───────── */
+const P={eye:1,smile:.3,open:0,brow:0,blush:0,red:0,puff:0,ear:0,love:0,cross:0,tilt:0,turn:0,z:0,pl:0,pr:0,sad:0};
+const BASE={...P},mk=o=>({...BASE,...o});
+const MOODS={
+ idle:mk({}),sleep:mk({eye:0,smile:.15,puff:-.1,k:2}),sleepy:mk({eye:.35,smile:.1,k:3}),
+ happy:mk({smile:1,open:.25,blush:.35,k:7}),
+ love:mk({smile:1,open:.35,blush:1,love:1,eye:1.08,z:1,ear:-.3,k:8}),
+ angry:mk({eye:.6,smile:-.8,brow:1,red:1,puff:1,cross:1,ear:-.5,k:14}),
+ sad:mk({eye:.85,smile:-1,brow:-1,puff:-.7,ear:1,tilt:-.05,sad:1,z:-.2,k:5}),
+ surprised:mk({eye:1.3,open:1,smile:0,puff:.35,z:.4,k:16}),
+ curious:mk({eye:1.12,smile:.1,tilt:.14,k:8}),
+ scared:mk({eye:1.35,open:.8,smile:-.4,puff:1,z:-.8,ear:.3,k:14}),
+ excited:mk({eye:1.15,smile:1,open:.8,blush:.25,pl:1,pr:1,k:9}),
+ proud:mk({eye:.75,smile:1,puff:.35,pl:1,pr:1,blush:.25,k:8}),
+ bored:mk({eye:.6,smile:-.15,ear:.4,sad:.4,k:3}),tired:mk({eye:.4,smile:-.2,open:.3,ear:.6,k:4}),
+ offended:mk({eye:.5,smile:-.6,brow:.6,red:.4,cross:1,turn:1,puff:.3,k:6}),
+ confused:mk({eye:1.1,smile:-.2,tilt:-.18,brow:-.3,blush:.5,k:10}),
+ yawn:mk({eye:.3,open:1,smile:0,k:6}),weird:mk({eye:1.3,open:.6,smile:.6,tilt:.25,k:12})
+};
+let mood='sleep',sleeping=true,seq=null,lookOv=null,idleLook={x:0,y:0};
+const act={wave:0,shake:0,scratch:0,rainbow:0};
+const g={x:0,y:0};
+let bx=0,by=0,bvx=0,bvy=0,jy=0,jv=0,sq=0,sqv=0,blink=0,nextBlink=2;
+
+const pet={
+ hop(p=6){if(jy<0)return;jv=-p*.65;sqv=-2.5;SFX.hop()},
+ shake(){act.shake=.9},
+ lookAt(x,y,d=1.5){lookOv={x,y,until:T+d}}
+};
+const idleMood=()=>sleeping?'sleep':(camOn&&T-lastHand>18?'bored':'idle');
+
+/* ───────── SECUENCIAS: [estado, segundos, efecto al entrar] ───────── */
+const SEQ={
+ wakeIntro:[['sleepy',1.6],['surprised',.5,()=>SFX.surprise()],['happy',1.6,()=>{say('Hola 👋');SFX.hello();act.wave=1.6;pet.lookAt(0,.15,2)}],['happy',2.6,()=>say('Muéstrame qué puedes hacer.')],['idle',.1,()=>$('#guide').classList.add('on')]],
+ wakeUp:[['surprised',.5,()=>SFX.surprise()],['happy',1.2]],
+ sleepy:[['sleepy',1.6,()=>SFX.sleep()]],
+ love:[['surprised',.45,()=>SFX.surprise()],['love',3.6,()=>{SFX.love();pet.hop(5);burst('heart',14)}],['happy',1.2]],
+ superLove:[['love',5,()=>{SFX.love();pet.hop(9);pet.shake();burst('heart',40);say('¡¡Te quiero!!')}],['happy',1.5]],
+ ecstatic:[['excited',3.6,()=>{SFX.cheer();pet.hop(9);burst('heart',12);burst('star',16)}],['happy',1]],
+ angry:[['surprised',.5,()=>SFX.surprise()],['confused',.6],['angry',3.4,()=>{SFX.angry();burst('anger',1);say('¡Oye!',1600)}],['idle',.4]],
+ confused:[['surprised',.5,()=>SFX.surprise()],['confused',2.4,()=>say('¿...y el corazón?',2200)],['angry',2,()=>{SFX.angry();burst('anger',1)}],['idle',.3]],
+ sulk:[['angry',.7,()=>SFX.angry()],['offended',6,()=>say('Hmph.',2500)],['sad',1.2]],
+ sad:[['surprised',.3],['sad',3.2,()=>SFX.sad()],['idle',.3]],
+ thumbUp:[['happy',.3],['proud',2.6,()=>{SFX.cheer();burst('star',16);pet.hop(6)}]],
+ victory:[['excited',2.4,()=>{SFX.cheer();pet.hop(9);burst('star',22)}]],
+ wave:[['happy',2.6,()=>{SFX.hello();act.wave=2.4}]],
+ waveFast:[['excited',2.4,()=>{SFX.cheer();act.wave=2.4;pet.hop(5)}]],
+ grudge:[['curious',2.4,()=>say('...¿ahora sí me saludas?',2400)]],
+ fist:[['curious',.5],['scared',.9,()=>SFX.surprise()],['curious',1.6]],
+ point:[['curious',1.8]],
+ scared:[['scared',1.8,()=>{SFX.surprise();pet.hop(6);burst('spark',8)}],['curious',.8]],
+ lost:[['curious',1.6]],
+ welcome:[['excited',2.4,()=>{SFX.cheer();pet.hop(8);burst('star',14);say('¡Volviste!',1800)}]],
+ tired:[['tired',.6,()=>pet.shake()],['yawn',1.6,()=>SFX.sleep()],['idle',.2]],
+ poke:[['surprised',.3,()=>{pet.hop(4);pet.shake()}],['happy',1.2]],
+ yawn:[['yawn',1.8,()=>SFX.sleep()],['idle',.2]],
+ weird:[['weird',1.4]],
+ scratch:[['curious',.4],['idle',1.4,()=>act.scratch=1.4]],
+ rare:[['excited',6,()=>{act.rainbow=6;SFX.cheer();burst('star',30);pet.hop(8);say('✨')}]]
+};
+function play(n){const s=SEQ[n];if(!s)return;seq={s,i:-1,t:0};step()}
+function step(){seq.i++;if(seq.i>=seq.s.length){seq=null;return}const[m,d,fn]=seq.s[seq.i];mood=m;seq.t=d;fn&&fn()}
+
+/* ───────── PARTÍCULAS ───────── */
+const parts=[];
+function burst(type,n){for(let i=0;i<n;i++){const a=rnd(0,6.28),sp=rnd(.8,1.6);
+ if(type==='heart')parts.push({t:type,x:rnd(-.9,.9),y:rnd(-1.2,-.6),vx:rnd(-.15,.15),vy:-rnd(.3,.7),gr:0,s:rnd(.07,.16),l:rnd(1.3,2.2)});
+ else if(type==='star')parts.push({t:type,x:0,y:-.1,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-.6,gr:1.4,s:rnd(.12,.22),l:rnd(1,1.6)});
+ else if(type==='spark')parts.push({t:type,x:rnd(-1,1),y:rnd(-1,1),vx:rnd(-.5,.5),vy:rnd(-.5,.5),gr:0,s:.03,l:.8});
+ else if(type==='anger')parts.push({t:type,x:.75,y:-1.05,vx:0,vy:0,gr:0,s:.3,l:3});
+ else if(type==='zzz')parts.push({t:type,x:.6,y:-.8,vx:.1,vy:-.25,gr:0,s:.2,l:2.4,m:2.4})}}
+
+/* ───────── RENDER ───────── */
+const cv=$('#c'),ctx=cv.getContext('2d');
+let W,H,dpr,cx,cy,R;const fur=[];
+function resize(){dpr=q.low?1:Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*dpr;cv.height=H*dpr;R=Math.min(W*.3,H*.21);cx=W/2;cy=H*.47;
+ const n=q.low?72:150;fur.length=0;for(let i=0;i<n;i++)fur.push({a:i/n*6.2832+rnd(-.02,.02),l:rnd(.8,1.25),o:0,v:0,w:rnd(.05,.09)})}
+addEventListener('resize',resize);resize();
+
+const FUR=[[186,108,182],[232,160,210],[255,214,236]],RED=[236,78,78];
+function C(i,a=1){if(act.rainbow>0)return`hsla(${(T*120+i*40)%360},80%,${[58,68,82][i]}%,${a})`;const f=FUR[i],k=P.red*.65;return`rgba(${lerp(f[0],RED[0],k)|0},${lerp(f[1],RED[1],k)|0},${lerp(f[2],RED[2],k)|0},${a})`}
+function heart(x,y,s,c){ctx.fillStyle=c;ctx.beginPath();ctx.moveTo(x,y+s*.9);ctx.bezierCurveTo(x-s*1.6,y-s*.2,x-s*.8,y-s*1.2,x,y-s*.45);ctx.bezierCurveTo(x+s*.8,y-s*1.2,x+s*1.6,y-s*.2,x,y+s*.9);ctx.fill()}
+
+function update(dt){
+ for(const k of['wave','shake','scratch','rainbow'])if(act[k]>0)act[k]-=dt;
+ if(seq){seq.t-=dt;if(seq.t<=0)step()}else mood=idleMood();
+ const M=MOODS[mood],kk=1-Math.exp(-dt*(M.k||6));
+ for(const k in P){let t=M[k];if(k==='pr'&&(act.wave>0||act.scratch>0))t=1;P[k]=lerp(P[k],t,kk)}
+ // mirada
+ let tg=idleLook,fast=4;
+ if(lookOv&&T<lookOv.until)tg=lookOv;else if(hand&&T-hand.t<.5){tg={x:clamp((hand.x-.5)*2.4,-1.3,1.3),y:clamp((hand.y-.5)*2.4,-1.3,1.3)};fast=6}else if(ptr&&T-ptr.t<4)tg=ptr;
+ const gk=1-Math.exp(-dt*fast);g.x=lerp(g.x,tg.x,gk);g.y=lerp(g.y,tg.y+P.sad*.6,gk);
+ // parpadeo
+ nextBlink-=dt;if(nextBlink<0){blink=1;nextBlink=rnd(2,5)}if(blink>0)blink=Math.max(0,blink-dt*7);
+ // física del cuerpo
+ const tx=g.x*.09*(1-P.turn),ty=g.y*.04+P.z*.04,ox=bx,oy=by;
+ bvx+=((tx-bx)*90-bvx*12)*dt;bx+=bvx*dt;bvy+=((ty-by)*90-bvy*12)*dt;by+=bvy*dt;
+ if(jy<0||jv<0){jv+=22*dt;jy+=jv*dt;if(jy>=0){jy=0;sqv=3;jv=0}}
+ sqv+=(-sq*200-sqv*14)*dt;sq+=sqv*dt;
+ const vx=(bx-ox)/dt,vy=(by-oy)/dt+jv;
+ // pelaje: muelles con inercia
+ const jit=Math.max(P.red*50,P.z<-.4?P.puff*60:0);
+ for(const f of fur){const tX=-Math.sin(f.a),tY=Math.cos(f.a);
+  const F=-(vx*tX+vy*tY)*14+rnd(-1,1)*jit+Math.sin(T*50+f.a*2)*90*Math.max(act.shake,0);
+  f.v+=(-90*f.o-6*f.v+F)*dt;f.o=clamp(f.o+f.v*dt,-1.1,1.1)}
+ // partículas
+ if(sleeping&&Math.random()<dt*.5)burst('zzz',1);
+ for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=p.gr*dt;p.l-=dt;if(p.l<=0)parts.splice(i,1)}
+}
+
+function draw(){
+ ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+ const ground=cy+R*1.12,ss=clamp(1+jy*.8,.5,1);
+ let gl=ctx.createRadialGradient(cx,ground,0,cx,ground,R*1.6);gl.addColorStop(0,'rgba(255,170,210,.22)');gl.addColorStop(1,'rgba(255,170,210,0)');ctx.fillStyle=gl;ctx.fillRect(0,ground-R*1.6,W,R*3.2);
+ ctx.fillStyle='rgba(20,8,40,.4)';ctx.beginPath();ctx.ellipse(cx+bx*R,ground,R*.8*ss,R*.14*ss,0,0,7);ctx.fill();
+ const zs=(1+P.z*.1)*(1+Math.sin(T*(sleeping?1.4:2.4))*.015),Rb=R*(1+P.puff*.07);
+ const rot=P.tilt+g.x*.05+Math.sin(T*38)*.07*Math.max(act.shake,0)+(act.scratch>0?Math.sin(T*18)*.04:0);
+ ctx.save();ctx.translate(cx+bx*R,cy+(by+jy)*R);ctx.translate(0,R*.95);ctx.rotate(rot);ctx.scale((1+sq)*zs,(1-sq)*zs);ctx.translate(0,-R*.95);
+ // orejas
+ for(const s of[-1,1]){ctx.save();ctx.translate(s*.55*Rb,-.78*Rb);ctx.rotate(s*(.45+P.ear*.9));
+  ctx.fillStyle=C(0);ctx.beginPath();ctx.ellipse(0,-.15*Rb,.19*Rb,.32*Rb,0,0,7);ctx.fill();
+  ctx.fillStyle='rgba(255,140,180,.75)';ctx.beginPath();ctx.ellipse(0,-.12*Rb,.1*Rb,.2*Rb,0,0,7);ctx.fill();ctx.restore()}
+ // pelaje trasero (dos capas)
+ ctx.lineCap='round';const len0=Rb*(.24+clamp(P.puff,0,1)*.2+(P.puff<0?P.puff*.08:0)),base=Rb*.9;
+ for(let pass=0;pass<2;pass++){ctx.strokeStyle=C(pass?1:0);
+  for(let i=0;i<fur.length;i++){const f=fur[i],sp=1+P.red*.5*(i%2?1:-.3),L=len0*f.l*sp*(pass?.72:1),a=f.a+f.o;
+   ctx.lineWidth=f.w*Rb*(pass?.8:1.25);ctx.beginPath();ctx.moveTo(Math.cos(f.a)*base,Math.sin(f.a)*base);
+   ctx.quadraticCurveTo(Math.cos(f.a+f.o*.4)*(base+L*.5),Math.sin(f.a+f.o*.4)*(base+L*.5),Math.cos(a)*(base+L),Math.sin(a)*(base+L));ctx.stroke()}}
+ // cuerpo
+ const gr=ctx.createRadialGradient(-Rb*.3,-Rb*.4,Rb*.1,0,0,Rb*1.05);gr.addColorStop(0,C(2));gr.addColorStop(.55,C(1));gr.addColorStop(1,C(0));
+ ctx.fillStyle=gr;ctx.beginPath();ctx.arc(0,0,Rb,0,7);ctx.fill();
+ ctx.save();ctx.translate(0,.5*Rb);ctx.scale(1,.75);const bg=ctx.createRadialGradient(0,0,0,0,0,.62*Rb);bg.addColorStop(0,C(2,.9));bg.addColorStop(1,C(2,0));ctx.fillStyle=bg;ctx.beginPath();ctx.arc(0,0,.62*Rb,0,7);ctx.fill();ctx.restore();
+ if(!q.low){ctx.strokeStyle=C(2,.5);ctx.lineWidth=.05*Rb;for(let i=0;i<fur.length;i+=2){const f=fur[i],a=f.a+f.o*.7;ctx.beginPath();ctx.moveTo(Math.cos(f.a)*Rb*.74,Math.sin(f.a)*Rb*.74);ctx.lineTo(Math.cos(a)*Rb*.96,Math.sin(a)*Rb*.96);ctx.stroke()}}
+ // patitas
+ ctx.fillStyle=C(0);for(const s of[-1,1]){ctx.beginPath();ctx.ellipse(s*.4*Rb,.93*Rb,.2*Rb,.11*Rb,0,0,7);ctx.fill()}
+ // cara
+ ctx.save();ctx.globalAlpha=clamp(1-P.turn*1.4,0,1);ctx.translate(P.turn*Rb*1.3+g.x*Rb*.08,g.y*Rb*.06);
+ const eo=P.eye*(1-blink*.95),rx=.27*Rb,ry=.32*Rb;
+ for(const s of[-1,1]){const ex=s*.34*Rb,ey=-.05*Rb;
+  if(eo<.14){ctx.strokeStyle='#3b2346';ctx.lineWidth=.045*Rb;ctx.beginPath();ctx.arc(ex,ey,rx*.8,.15*Math.PI,.85*Math.PI);ctx.stroke();continue}
+  const h=ry*Math.min(eo,1.35);ctx.save();ctx.beginPath();ctx.ellipse(ex,ey,rx,h,0,0,7);ctx.fillStyle='#fff';ctx.fill();ctx.clip();
+  const ix=ex+g.x*rx*.42,iy=ey+g.y*h*.38,ir=rx*.8,ih=Math.min(ir*1.05,h*1.05);
+  const ig=ctx.createRadialGradient(ix,iy,0,ix,iy,ir);ig.addColorStop(0,'#6a4a8c');ig.addColorStop(1,'#241338');ctx.fillStyle=ig;ctx.beginPath();ctx.ellipse(ix,iy,ir,ih,0,0,7);ctx.fill();
+  ctx.fillStyle='#120820';ctx.beginPath();ctx.ellipse(ix,iy,ir*.5,ih*.5,0,0,7);ctx.fill();
+  if(P.love>.3){ctx.globalAlpha=clamp((P.love-.3)*1.6,0,1);heart(ix,iy,ir*.62*(1+Math.sin(T*9)*.08),'#ff4f8b');ctx.globalAlpha=1}
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(ix-ir*.3,iy-ih*.35,ir*.27,0,7);ctx.fill();ctx.beginPath();ctx.arc(ix+ir*.32,iy+ih*.3,ir*.12,0,7);ctx.fill();
+  if(Math.abs(P.brow)>.02){const di=P.brow>0?P.brow*h*.9:0,dO=P.brow>0?P.brow*h*.25:-P.brow*h*.6;ctx.fillStyle=C(0);ctx.beginPath();
+   ctx.moveTo(ex+s*rx*1.2,ey-h*1.3);ctx.lineTo(ex-s*rx*1.2,ey-h*1.3);ctx.lineTo(ex-s*rx*1.2,ey-h+di);ctx.lineTo(ex+s*rx*1.2,ey-h+dO);ctx.fill()}
+  ctx.restore()}
+ ctx.fillStyle='rgba(120,40,90,.7)';ctx.beginPath();ctx.ellipse(0,.17*Rb,.035*Rb,.025*Rb,0,0,7);ctx.fill();
+ if(P.blush>.02){ctx.fillStyle=`rgba(255,100,145,${P.blush*.6})`;for(const s of[-1,1]){ctx.beginPath();ctx.ellipse(s*.6*Rb,.2*Rb,.12*Rb,.075*Rb,0,0,7);ctx.fill()}}
+ const my=.34*Rb,mw=(.1+P.open*.03)*Rb;
+ if(P.open>.1){const oh=Rb*(.03+P.open*.1);ctx.fillStyle='#5a1f3a';ctx.beginPath();ctx.ellipse(0,my+oh*.4,mw,oh,0,0,7);ctx.fill();ctx.fillStyle='#ff8fb0';ctx.beginPath();ctx.ellipse(0,my+oh*.9,mw*.6,oh*.45,0,0,7);ctx.fill()}
+ else{ctx.strokeStyle='#4a2a54';ctx.lineWidth=.04*Rb;ctx.beginPath();ctx.moveTo(-mw,my);ctx.quadraticCurveTo(0,my+P.smile*Rb*.13,mw,my);ctx.stroke()}
+ ctx.restore();
+ // brazos
+ for(const s of[-1,1]){const pT=s<0?P.pl:P.pr;let px=lerp(s*.95,s*1.08,pT),py=lerp(.3,-.45,pT);
+  if(act.wave>0&&s>0){px+=Math.sin(T*12)*.08;py+=Math.cos(T*12)*.03}if(act.scratch>0&&s>0){px=.45;py=-.75+Math.sin(T*20)*.05}
+  px=lerp(px,s*.2,P.cross);py=lerp(py,.55,P.cross);
+  ctx.strokeStyle=C(0);ctx.lineWidth=.2*Rb;ctx.beginPath();ctx.moveTo(s*.8*Rb,.2*Rb);ctx.lineTo(px*Rb,py*Rb);ctx.stroke();
+  ctx.fillStyle=C(1);ctx.beginPath();ctx.arc(px*Rb,py*Rb,.14*Rb,0,7);ctx.fill()}
+ ctx.restore();
+ // partículas
+ ctx.textAlign='center';ctx.textBaseline='middle';
+ for(const p of parts){const x=cx+bx*R+p.x*R,y=cy+(by+jy)*R+p.y*R;ctx.globalAlpha=clamp(p.l*1.6,0,1);
+  if(p.t==='heart')heart(x,y,p.s*R,'#ff5c93');
+  else if(p.t==='star'){ctx.fillStyle='#ffe98a';ctx.font=`${p.s*R*2}px sans-serif`;ctx.fillText('✦',x,y)}
+  else if(p.t==='spark'){ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x,y,p.s*R,0,7);ctx.fill()}
+  else if(p.t==='anger'){ctx.font=`${p.s*R*(2+Math.sin(T*14)*.25)}px sans-serif`;ctx.fillText('💢',x,y)}
+  else{ctx.fillStyle='#cfd6ff';ctx.font=`600 ${p.s*R*2}px Fredoka,sans-serif`;ctx.fillText('z',x,y)}}
+ ctx.globalAlpha=1;
+}
+
+/* ───────── GESTOS: detección, estabilidad y cooldown ───────── */
+// n = frames consecutivos requeridos, cd = segundos de cooldown. Para un gesto nuevo: añadir aquí + en classify() + en react().
+const GEST={heart:{l:'❤️ Corazón',n:6,cd:3.5},middle:{l:'🖕 Dedo medio',n:9,cd:4},thumbUp:{l:'👍 Thumbs up',n:5,cd:2.5},thumbDown:{l:'👎 Thumbs down',n:6,cd:3},
+ victory:{l:'✌️ Victoria',n:5,cd:3},wave:{l:'👋 Mano detectada',n:6,cd:4},fist:{l:'✊ Puño',n:6,cd:3},point:{l:'👉 Señalando',n:5,cd:2.5}};
+const BUILTIN={Thumb_Up:'thumbUp',Thumb_Down:'thumbDown',Victory:'victory',Open_Palm:'wave',Closed_Fist:'fist'};
+let rec,camOn=false,lastDet=0,lastVT=-1,ar=4/3,hand=null,miss=0,lastHand=0,lastAct=0,scaredCd=0,ptr=null;
+const D=(a,b)=>Math.hypot((a.x-b.x)*ar,a.y-b.y),v=$('#v'),pc=$('#pc').getContext('2d');
+
+function classify(L,r){
+ if(L.length>=2){const a=L[0],b=L[1],sz=(D(a[0],a[9])+D(b[0],b[9]))/2;
+  if(D(a[8],b[8])<.6*sz&&D(a[4],b[4])<.7*sz&&(a[8].y+b[8].y)/2<(a[4].y+b[4].y)/2-.05*sz&&Math.abs(a[0].x-b[0].x)*ar>.5*sz)return'heart'}
+ const h=L[0],s=D(h[0],h[9]),ext=[8,12,16,20].map(i=>D(h[i],h[0])>D(h[i-2],h[0])*1.15);
+ if(ext[1]&&!ext[0]&&!ext[2]&&!ext[3]&&h[12].y<h[0].y-.9*s)return'middle';
+ const bg=r.gestures?.[0]?.[0];if(bg&&bg.score>.65&&BUILTIN[bg.categoryName])return BUILTIN[bg.categoryName];
+ if(ext[0]&&!ext[1]&&!ext[2]&&!ext[3]){const side=-(h[8].x-h[5].x);if(Math.abs(side)*ar>.05)lookOv={x:Math.sign(side)*1.3,y:0,until:T+1.4};return'point'}
+ return null}
+
+let cand=null,cnt=0;const lastFire={};
+function feed(id){if(id===cand){cnt++}else{cand=id;cnt=id?1:0}
+ if(!id)return;const gd=GEST[id];if(cnt===gd.n&&T-(lastFire[id]??-99)>gd.cd){lastFire[id]=T;fire(id)}}
+
+function handle(r){
+ const L=r.landmarks||[];pc.clearRect(0,0,112,84);pc.fillStyle='#ffd3e6';
+ L.forEach(h=>h.forEach(p=>pc.fillRect((1-p.x)*112-1.5,p.y*84-1.5,3,3)));
+ if(!L.length){if(hand&&++miss>4){if(hand.speed>.7){pet.lookAt((hand.x-.5)*2.6,(hand.y-.5)*2.6,1.8);if(!seq&&!sleeping)play('lost')}hand=null}feed(null);return}
+ miss=0;const h=L[0],size=D(h[0],h[9]),x=1-(h[0].x+h[9].x)/2,y=(h[0].y+h[9].y)/2;
+ const dtt=hand?Math.max(T-hand.t,.016):.05,sp=hand?Math.hypot(x-hand.x,y-hand.y)/dtt:0,prevAvg=hand?hand.avg:size;
+ if(!hand)onAppear();
+ else if(size/prevAvg>1.5&&T>scaredCd&&!sleeping){scaredCd=T+4;seq=null;play('scared')}
+ hand={x,y,t:T,speed:lerp(hand?hand.speed:0,sp,.4),avg:lerp(prevAvg,size,.1),size};lastHand=lastAct=T;
+ feed(classify(L,r))}
+
+function onAppear(){
+ if(sleeping){wake();return}
+ if(T-lastHand>18&&!seq){play('welcome');return}
+ SFX.hand()}
+function wake(){sleeping=false;play('wakeUp')}
+
+/* ───────── REACCIONES + MEMORIA DE SESIÓN ───────── */
+const mem={hist:[],last:null,t:-99};
+function fire(id){
+ chip(GEST[id].l);$('#guide').classList.remove('on');
+ if(sleeping){wake();return}
+ const n=T;mem.hist=mem.hist.filter(h=>n-h.t<40);mem.hist.push({id,t:n});
+ const hearts=mem.hist.filter(h=>h.id==='heart').length,neg=mem.hist.filter(h=>h.id==='middle'||h.id==='thumbDown').length,recent=n-mem.t<7;let name;
+ switch(id){
+  case'heart':name=hearts>=3?'superLove':'love';break;
+  case'thumbUp':name=mem.last==='heart'&&recent?'ecstatic':'thumbUp';break;
+  case'middle':name=neg>=3?'sulk':mem.last==='heart'&&recent?'confused':'angry';break;
+  case'thumbDown':name=neg>=3?'sulk':'sad';break;
+  case'wave':name=mem.last==='middle'&&n-mem.t<30?'grudge':hand&&hand.speed>1.2?'waveFast':'wave';break;
+  default:name=id}
+ if(mem.hist.length>=9&&id!=='middle'&&Math.random()<.6){name='tired';mem.hist=[]}
+ mem.last=id;mem.t=n;seq=null;play(name)}
+
+/* ───────── COMPORTAMIENTO IDLE ALEATORIO ───────── */
+let nextIdle=5;
+function idleTick(dt){
+ if(!sleeping&&!seq&&camOn===false&&ptr&&T-ptr.t<0)return;
+ if(!sleeping&&T-lastAct>40){sleeping=true;seq=null;play('sleepy');return}
+ if(sleeping||seq)return;nextIdle-=dt;if(nextIdle>0)return;nextIdle=rnd(3,8);
+ const r=Math.random();
+ if(r<.02)play('rare');
+ else if(r<.3)idleLook={x:rnd(-1,1),y:rnd(-.6,.6)},setTimeout(()=>idleLook={x:0,y:0},rnd(1200,2200));
+ else if(r<.45)pet.lookAt(0,.1,2.5);
+ else if(r<.55)play('yawn');else if(r<.65)play('scratch');else if(r<.75)pet.shake();
+ else if(r<.85)pet.hop(5);else if(r<.9)play('weird');else act.wave=1}
+
+/* ───────── interacción táctil/ratón (respaldo sin cámara) ───────── */
+addEventListener('pointermove',e=>{ptr={x:clamp((e.clientX/W-.5)*2.4,-1.3,1.3),y:clamp((e.clientY/H-.5)*2.4,-1.3,1.3),t:T};lastAct=T});
+addEventListener('pointerdown',e=>{lastAct=T;if(sleeping||e.target.closest('button'))return;if(Math.hypot(e.clientX-cx,e.clientY-cy)<R*1.2){seq=null;play('poke')}});
+
+/* ───────── arranque ───────── */
+async function startCam(){
+ const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:q.low?320:640},height:{ideal:q.low?240:480}},audio:false});
+ v.srcObject=s;await v.play();camOn=true;$('#cam').classList.add('on')}
+async function initVision(){
+ const fs=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+ const o=d=>({baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",delegate:d},runningMode:"VIDEO",numHands:2,minHandDetectionConfidence:.6,minHandPresenceConfidence:.6,minTrackingConfidence:.6});
+ try{rec=await GestureRecognizer.createFromOptions(fs,o("GPU"))}catch{rec=await GestureRecognizer.createFromOptions(fs,o("CPU"))}}
+
+$('#go').onclick=async()=>{
+ actx=new (window.AudioContext||window.webkitAudioContext)();$('#go').remove();sleeping=false;lastAct=T;play('wakeIntro');
+ try{await Promise.all([startCam(),initVision()])}catch(e){console.warn(e);setTimeout(()=>say('No puedo ver tus manos. Mueve el dedo por la pantalla 👆',4000),6500)}};
+$('#snd').onclick=e=>{sound=!sound;e.target.textContent=sound?'🔊':'🔇'};
+$('#qual').onclick=e=>{q.low=!q.low;e.target.textContent=q.low?'Calidad baja':'Calidad alta';resize()};
+$('#qual').textContent=q.low?'Calidad baja':'Calidad alta';
+
+let last=performance.now();
+function frame(now){
+ const dt=Math.min(.05,(now-last)/1000);last=now;T+=dt;
+ if(rec&&camOn&&v.readyState>=2&&now-lastDet>=(q.low?66:33)&&v.currentTime!==lastVT){lastDet=now;lastVT=v.currentTime;ar=v.videoWidth/v.videoHeight;
+  try{handle(rec.recognizeForVideo(v,now))}catch(e){}}
+ idleTick(dt);update(dt);draw();requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script></body></html>
